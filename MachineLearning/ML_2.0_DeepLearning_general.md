@@ -202,16 +202,16 @@ $$\mathrm{ReLU}(x) = \max(0, x)$$
 Pros:
 
 - Easy to calculate, converge fast, gradient is always zero
-
 - Sparse activation（负区间直接为0），有一定正则化效果。
-
 - Practically, perform good in Deep NN
+- ReLU family (ReLU, Leaky ReLU) are computationally cheapest - just comparisons and multiplications.
 
 Cons：
 
 - Dead neuron problem: 如果权重更新后神经元长期落在负区间，梯度为0无法激活
 
 - 输出非0均值，可能导致网络某些层偏移。(Non-zero mean output may cause certain layers in the network to become biased or shifted)
+  - 但如果做batch norm可以很好的解决这个问题
 - 梯度问题：
   - $x>0$时梯度为1，$x<0$时为0。
   - 负区间无法更新权重（dead neuron）。
@@ -219,6 +219,7 @@ Cons：
 典型场景：
 
 - 现代CNN、MLP等深度网络的默认激活函数。
+  - because sparse activations help with feature detection and computational efficiency, plus dead neurons are less problematic with many parallel feature maps
 - 基本是所有主流深度学习框架的“默认首选”
 
 由于存在神经元死亡问题，所以现在有改进型ReLU：
@@ -257,6 +258,7 @@ Cons:
 典型场景
 
 - BERT/GPT/ViT等大模型用的GELU
+  - because the smooth, probabilistic gating allows better gradient flow through very deep architectures and self-attention mechanisms benefit from the softer activation boundaries
 
 #### PReLU (Parametric ReLU)
 
@@ -326,6 +328,282 @@ Cons:
 - Classic RNN hidden layers, and hidden layers in early deep learning models
 - 需要输出对称分布symmetric (zero-centered)时
   - symmetric distribution适用于需要捕捉正负信息，或者上游数据中心化的场景，尤其在RNN等序列建模、残差建模等领域
+- RNNs traditionally used tanh for hidden states because the bounded, zero-centered output prevents exploding activations when processing long sequences, though modern RNNs often use gating mechanisms instead
+
+### Softmax
+
+多分类输出常用softmax，输出归一化为概率分布
+一般只用于output layer binary softmax is equivalent to Sigmoid
+
+Computational Cost Trade-offs
+ReLU family (ReLU, Leaky ReLU) are computationally cheapest - just comparisons and multiplications. GELU is most expensive due to error function/tanh calculations, but the performance gains in large models justify the cost. Sigmoid/Tanh fall in between with exponential operations. In practice, modern GPUs handle these differences well, so performance gains often outweigh computational overhead.
+
+## Optimizers
+
+### ADAM (Adaptive Moment Estimation) 最重要, 靠北
+
+Adam自带L2 norm $$J_{total} = J_{data} + \frac{\lambda}{2} ||\theta||^2$$
+
+一阶矩估计 (类似Momentum):
+$$m_t = \beta_1 m_{t-1} + (1-\beta_1) \nabla_\theta J(\theta_t)$$
+- 梯度的指数移动平均, 提供"方向"信息
+- 类似Momentum的作用
+二阶矩估计 (类似RMSprop):
+$$v_t = \beta_2 v_{t-1} + (1-\beta_2) (\nabla_\theta J(\theta_t))^2$$
+- 梯度平方的指数移动平均, 提供"尺度"信息
+- 类似RMSprop的作用
+偏差修正 (Bias Correction):
+$$\hat{m_t} = \frac{m_t}{1-\beta_1^t}$$
+$$\hat{v_t} = \frac{v_t}{1-\beta_2^t}$$
+参数更新:
+$$\theta_{t+1} = \theta_t - \frac{\eta}{\sqrt{\hat{v_t}} + \epsilon} \hat{m_t}$$
+
+$$\text{更新方向} = \frac{\hat{m_t}}{\sqrt{\hat{v_t}}}  \quad \text{（标准化的momentum）}$$
+
+Pros:
+
+- Adaptive learning rate
+  - Each parameter has its own learning rate. 
+    - 梯度大的参数 → 小步长（精细调节）
+    - 梯度小的参数 → 大步长（快速学习）
+  - Insensitive to HyperParameters
+    - 默认参数就差不多
+    - 不像SGD需要仔细调节学习率和momentum
+  - 处理稀疏梯度优秀：
+    - 对于很少更新的参数（如embedding），保持较高学习率
+    - 非常适合NLP任务
+  - Fast convergence
+    - Normally 5-10 times faster than SGD
+  - Memory efficiency
+    - only need to store $m_t, v_t$
+
+Cons:
+- Generalization 争议
+  - Generalization is not as good as SGD in some cases
+  - Adam容易在训练集上过拟合
+- Learning rate decay
+- Memory efficieny 
+  - 比SGD需要2倍额外内存（存储 $v_t, m_t$​）
+  - 大模型训练时可能是问题
+
+什么时候用Adam：
+
+- 深度学习默认首选
+- Transformer、CNN等复杂模型
+- 快速原型开发
+- 稀疏数据/NLP任务
+
+什么时候考虑SGD：
+
+- 追求最佳泛化性能
+- 简单模型（logistic regression等）
+- 计算资源极度受限
+- 已有成熟的SGD调参经验
+
+导致学习率过小，类似AdaGrad问题
+
+### AdamW (Adam with Weight Decay) 更重要, 靠北
+
+对于普通Adam, loss function 带一个自动L2正则化防止overfit（本来adam generlaization就不好）
+$$J_{total} = J_{data} + \frac{\lambda}{2} ||\theta||^2$$
+
+但这么一带 算gradient的时候就会包含L2 norm会有点参数自己调节自己的意思
+
+权重衰减被"自适应化"了
+- L2项 $\lambda \theta$被包含在梯度中
+- Adam的自适应学习率会对权重衰减项也进行缩放
+- 结果：权重衰减的效果变得不可预测
+
+AdamW approach
+
+虽然损失函数的梯度还是带L2 norm的derivative, but we only use the data part gradient!!!
+$$m_t = \beta_1 m_{t-1} + (1-\beta_1) \nabla J_{data}  \text{  (只用数据梯度)}$$
+$$v_t = \beta_2 v_{t-1} + (1-\beta_2) (\nabla J_{data})^2$$
+因为gradient中没有包含正则化，所以我们在此处让正则化直接作用于系数
+$$\theta_{t+1} = \theta_t - \eta \frac{\hat{m_t}}{\sqrt{\hat{v_t}} + \epsilon} - \eta \lambda \theta_t$$
+
+$$\theta_{t+1} = \theta_t - \frac{\eta}{\sqrt{v_t} + \epsilon} (\nabla J_{data} + \lambda \theta_t)$$
+
+Pros:
+
+- 解决weight decay问题
+  -regularization直接作用于参数，不被自适应学习率扭曲(不进入gradient)
+  - 所有参数统一衰减比例，真正约束大参数
+- better generalization
+  - Reduce overfitting
+- Keep Adam Pros
+  - 自适应学习率，收敛快
+  - 对稀疏梯度友好
+- 大模型训练表现优秀
+  - Transformer等复杂架构的首选
+  - 在预训练大模型上效果突出
+
+Cons:
+
+- Extra HyperParameter
+  - 需要调节 $\lambda$, 虽然通常0.01就work，但有时需要fine-tune
+- 对小模型可能过度正则化：
+  - 简单任务可能不需要这么强的正则化
+  - 有时Adam甚至SGD就够了
+
+#### AdamW已经成为深度学习（特别是Transformer）的默认优化器选择，基本可以作为第一尝试
+
+
+### Batch Gradient Descent (BGD) 普通一optimizer
+
+$$\theta_{t+1} = \theta_t - \eta \nabla_\theta J(\theta_t)$$
+
+- $\theta_t$​：当前时刻（第t步）的参数值
+- $\theta_{t+1}$​：下一时刻（第t+1步）的参数值
+- η：学习率（步长），控制每次更新的幅度
+- ∇θ​J(θt​)：损失函数在当前参数处的梯度
+  - 等于所有data points的梯度平均值
+
+Pros:
+
+- Steady convergence
+- Accurate gradient direction
+
+Cons:
+- Computational inefficiency（每步都要遍历全部数据
+- Require a lot of memory 内存需求高
+- can't handle huge datasets
+- Can't be used in online learning.
+
+### SGD (Stochastic Gradient Descent)
+
+Stochastic = 随机性：
+
+- 每次只用一个随机选择的data point计算梯度
+- 不是用全部数据的"真实梯度"，而是用单个样本的"噪声梯度"
+
+$$\theta_{t+1} = \theta_t - \eta \nabla_\theta J(\theta_t; x^{(i)}, y^{(i)})$$
+
+Pros:
+- Fast, memory friendly 速度快，内存友好
+- Noise is helpful to escape from local optimal噪声帮助跳出局部最优
+  - 噪声帮助跳出局部最小值
+  - 更好的泛化：某种程度的"正则化"效果
+- Online learning 支持在线学习
+
+Cons:
+
+- Instable Convergence收敛不稳定
+- Severe oscillation震荡严重，可能不收敛到最优解
+- 可能在最优点附近"抖动"
+  - 可以通过Learning Rate Decay解决。
+
+### MBGD (Mini-Batch Gradient Descent) 全世界人都是讲究折衷的
+
+$$\theta_{t+1} = \theta_t - \eta \frac{1}{m} \sum_{j=1}^{m} \nabla_\theta J(\theta_t; x^{(j)}, y^{(j)})$$
+
+这个公式类似于把一个batch的SGD绑在一起然后求平均
+
+Pros:
+- A balence between BGD和SGD，
+- GPU parallelization friendly
+  - 一般的256size和GPU的核心数很接近，所以可能一下GPU就跑完了。
+- Convergence relatively stable
+
+Cons:
+- Need to tune batch size，仍有一定噪声
+- Batch size选择：32-512常见，太小不稳定，太大类似BGD
+
+### Momemtum Gradient Descent
+
+Momentum：球有惯性，会"记住"之前的运动方向，能冲过小坑
+
+$$v_t = \beta v_{t-1} + \eta \nabla_\theta J(\theta_t)$$
+$$\theta_{t+1} = \theta_t - v_t$$
+- $v_t$: momentum term
+- $\beta$ momentum coefficient (mostly 0.9), how much memory remember
+
+Pros:
+
+- speeding convergence
+  - When the gradient keeps the same, momentum accumulation
+  - normally 2-10 times faster than SGD
+- reduce oscillation
+  - 平滑优化路径
+- Jump out of local minima
+  - 惯性帮助冲过small local minima
+- 计算简单：
+  - 只需要额外存储一个velocity vector
+
+Cons:
+
+- 可能Overshooting：
+  - 惯性太大时可能冲过最优点
+  - 在最优点附近可能来回震荡
+- 额外HyperParameter：
+  - 需要调节momentum coefficient β
+  - 虽然0.9通常work，但有时需要fine-tune
+- Converge slow in some circumstance：
+  - 如果梯度方向频繁变化，momentum可能帮倒忙
+  - 在noisy gradient情况下有时不如adaptive methods
+- Still need learning rate tuning：
+  - 不是自适应学习率，还是需要manual tuning
+  - 没有解决不同参数需要不同学习率的问题
+
+### AdaGrad (自适应学习率优化算法)
+
+$$G_t = G_{t-1} + (\nabla_\theta J(\theta_t))^2$$
+$$\theta_{t+1} = \theta_t - \frac{\eta}{\sqrt{G_t} + \epsilon} \nabla_\theta J(\theta_t)$$
+
+- $G_t$：累积所有历史梯度的平方
+- 梯度大的参数 → $G_t$​大 → 学习率小（分母大）
+- 梯度小的参数 → $G_t$​小 → 学习率大
+
+直觉理解
+- 已经更新很多的参数（梯度累积大）→ 降低学习率，精细调节
+- 很少更新的参数（梯度累积小）→ 保持较大学习率，快速学习
+
+Pros
+
+ -self-adjust learning rate：不需要手动decay
+- 适合稀疏数据：对rarely updated parameters保持高学习率
+
+Cons
+- **Fatal Flaw**  - 学习率单调递减：
+  - $G_t$​只会越来越大（累积平方）
+- 学习率 $\frac{\eta}{\sqrt{G_t}}$会趋向于0
+- 训练后期几乎停止学习
+
+### RMSprop (Root Mean Square Propagation)
+
+$$v_t = \beta v_{t-1} + (1-\beta) (\nabla_\theta J(\theta_t))^2$$
+$$\theta_{t+1} = \theta_t - \frac{\eta}{\sqrt{v_t} + \epsilon} \nabla_\theta J(\theta_t)$$
+
+**核心创新：解决AdaGrad的致命缺陷**
+指数移动平均 vs 累积求和：
+
+AdaGrad: $G_t = G_{t-1} + (\nabla_\theta J)^2$ 累积所有历史）
+
+RMSprop: $v_t = \beta v_{t-1} + (1-\beta) (\nabla_\theta J)^2$（指数衰减历史）
+
+直觉理解
+- 有限记忆"的自适应学习率：
+- 只记住最近的梯度信息（通过指数衰减）
+- 远古的梯度会被"遗忘"
+- 学习率不会单调递减到0
+
+参数 $\beta$的作用：
+
+- $\beta$ = 0.9（常用）：大约记住最近 1/(1-0.9) = 10 步
+- $\beta$ 越大：记忆更长，更平滑
+- $\beta$ 越小：更像AdaGrad，但仍然有衰减
+
+Pros
+
+- Solve learning rate decay：不会训练后期停止学习 (learning rate will not keep shrinking)
+- Keep adaptability：仍然给不同参数不同学习率
+- 计算高效：只需额外存储 $v_t$
+
+Cons
+
+- 新增HyperPrameters：需要调节 β
+- 仍无momentum：没有利用梯度方向信息
+- 可能不稳定：在某些情况下仍有震荡
 
 
 
@@ -334,6 +612,23 @@ Cons:
 
 
 
+
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
 ## Other notes
 
 ### 为什么均值为0（zero-mean）有助于加快收敛？
@@ -369,22 +664,7 @@ Cons:
 # 
 
 
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
+
 归一化（BatchNorm/LayerNorm/GroupNorm/InstanceNorm）：每种都能简述原理、核心公式、各自优缺点、应用场景，最好写一张表总结。
 
 激活函数+优化器+初始化：整理一页A4纸，什么场景用啥，优缺点两句带过，面试不会让你细抠推导，主打“场景举例+优劣势”。
