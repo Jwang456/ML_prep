@@ -90,6 +90,15 @@ $$\text{Diversity}_{\text{norm}} = \frac{|\{c(j) : j \in N\}|}{|C|}$$
 
 #### 好的负样本 = 适度挑战 + 清晰区分 + 多样覆盖 
 
+## Old models
+
+### 但现代ads系统不用XGBoost主要因为：
+
+- 无法端到端学习embedding - embedding和task目标分离优化
+- 特征交叉深度有限 - tree depth限制，无法学习高阶复杂交叉  
+- 稀疏特征处理效率低 - 百万级ID需要embedding table，不是one-hot
+- 无法处理序列and multimodality - 用户行为序列、广告文本图像等
+
 ## Two-Tower Architecture
 
 Normally 用binned groups当作feature, 重点是速度快和recall好就可以，fine-ranking后面再做。
@@ -271,6 +280,7 @@ Item Tower: Embedding → MLP(512→256→128) → Vector Normalization
 7. 如何判断Two-Tower训练得好不好？
 
 - 离线指标: Recall@K, NDCG@K, AUC
+  - $DCG@K = \sum_{i=1}^{K} \frac{rel_i}{\log_2(i+1)}$
 - Embedding质量: 相似用户embedding相似
 - A/B测试: 最终的线上效果
 
@@ -511,6 +521,23 @@ Input Features
   - 不光是每个MLP的optimization
   - 也是每个gate的optimization
 
+#### ESMM Entire Space Multi-Task Model
+
+- 传统CVR模型只用点击样本训练，存在两个问题：
+  - 样本选择偏差 - 点击用户和全体用户分布不同
+  - 数据稀疏 - 转化样本相对点击样本很少
+
+ESMM通过在全样本空间同时建模CTR和CTCVR来解决这些问题
+
+Only funnel relationship
+```
+输入特征 → 共享Embedding层
+         ↙              ↘
+    CTR网络           CVR网络
+        ↘              ↙
+         CTCVR = CTR × CVR
+```
+
 ### Deep Interest Network
 
 DIN主要用在**精排阶段 (Fine-ranking)**, after retrieving top K most related items from two-tower model.
@@ -578,6 +605,54 @@ New Item Cold Start / 新物品冷启动
   - similar item average embedding
 
 随着interaction的增多，逐渐增加behavior weight (cold start以context / property为主)
+
+### 协同过滤 Collaborative Filtering
+
+它的核心思想是：“物以类聚，人以群分”——用户和物品之间的兴趣偏好是可以“协同”推断的。
+简单说，就是用大家的“历史行为”来相互推荐
+
+#### Memory-based CF 基于邻域的协同过滤
+
+User-based CF（基于用户的协同过滤）
+
+- 找和你相似的user, 把close user 喜欢但是你没看过/买过的推荐给你
+
+#### Item-based CF（基于物品的协同过滤
+
+- 找和你喜欢的（买过的）物品中，找出相似度最高的物品们推荐给你
+
+#### Model-based CF (基于模型的协同过滤)
+
+Pros:
+
+- 理论简洁，训练高效，工程实现成熟
+- 可解释性强，embedding可分析主成分
+- 适合大规模稀疏行为矩阵，线上召回效率高
+
+Cons: 
+
+- 冷启动表现差
+- Only linear relationship, cannot capture complex interactions
+
+ALS（交替最小二乘）
+
+- 专为“稀疏大规模行为矩阵”设计，可以直接高效处理大量缺失值（即行为矩阵里大部分是空的）
+- 最适合“行为只有少部分已知”的海量用户/商品/广告的工业级召回建模
+
+用户-广告（或物品）行为矩阵 $$R \in \mathbb{R}^{m \times n}$$
+
+- $m$个user
+- $n$个广告
+
+矩阵分解建模：
+
+$$R≈U⋅V^T$$
+ 
+- $U \in \mathbb{R}^{m \times k}$：每行是一个用户的embedding（隐因子向量）
+
+- $V \in \mathbb{R}^{n \times k}$：每行是一个广告/物品的embedding
+最终解起来不是直接解的，因为现实生活中的缺失值问题，所以是想要找到optimal U and V，可以让 $R-U^TV$ （点积/内积, 用户和单个广告的相似度分数）+ regularization 最小
+
 
 ## 搜广推 evaluation metrics
 

@@ -170,9 +170,19 @@ Normalizing across all spatial positions and all samples for each channel
 
 ## Normalization techniques
 
+为什么需要Normalization？
+
+- 核心问题：Internal Covariate Shift
+- 不norm的话 第100个epoch的input or output is very differently distributed from the first epoch
+
 ### Batch Normalization (BatchNorm) /  批归一化
 
 Normalizes across the batch dimension, computing mean and variance over all samples in a mini-batch for each feature。
+
+Batch Norm
+
+- 问的是：在这个batch中，特征1的值应该如何分布？
+- 对每个feature（即每一列），在一个mini-batch的所有样本上归一化。
 
 对一个batch内每个通道分别归一化（均值/方差），让数据分布固定，加速收敛
 
@@ -181,17 +191,112 @@ Normalizes across the batch dimension, computing mean and variance over all samp
 - Batch size是“每次训练看到多少条样本”的意思
 - 每次梯度更新用多少行数据，通常固定为32、64、128、256等，和特征数无关
 
+每次将所有data points assigns to different batch, we use one batch at a time during each epoch. 一个batch forward and back propagation走完一遍再开始下一个batch, $w$ is updated multiple times (batch numbers).走完一个epoch，继续走下一个epoch，但会重新把所有dp assign到不同batch
+
 Pros
 
 - Fast convergence / 收敛快速
+  - 允许使用更大的学习率
 - Reduces initialization sensitivity / 降低初始化敏感性
-- Allows higher learning rates / 允许更高学习率
+- Have some regularization effect
+- 与CNN架构的语义匹配
 
 Cons
 - Poor performance with small batches / 小批次性能差
 - Creates batch dependencies / 产生批次依赖
 
-#### Applications / 应用: CNNs, computer vision / 卷积神经网络、计算机视觉
+**Applications / 应用: CNNs, computer vision / 卷积神经网络、计算机视觉**
+
+### Layer Normalization (层归一化)
+
+Layer Norm:
+
+- 问的是：对于这个样本，它的所有特征应该如何分布？
+- 对每个样本（即每一行），把它的所有feature归一化
+
+对每个样本的所有特征维度进行归一化，不依赖于batch
+
+- 对单个样本的所有特征计算均值和方差
+- 标准化：(x - μ) / √(σ² + ε)
+- 缩放和平移：γ * x_norm + β
+  - γ和β的数量 = feature维度数
+
+#### 特点：
+
+- 不依赖batch size，适用于RNN和小batch场景
+- 对序列长度变化不敏感
+- 训练和推理时行为一致
+- 不会因为batch中样本分布差异大而不稳定
+- 特别适合domain adaptation和few-shot learning
+- Layer Norm: 跨特征归一化，适合序列模型和小batch
+
+Pros:
+
+- 特别适合RNN/Transformer等序列模型
+- 不受batch size影响
+- 在NLP任务中效果显著
+- parallelzation friendly
+  - 每个样本可以独立计算，便于并行
+  - 不需要等待整个batch才能计算
+
+适用场景
+- 变长序列：每个样本序列长度不同
+- 小样本学习：batch size很小(如1-4)
+- 在线学习：需要逐个样本处理
+- 推理优化：避免维护额外统计量
+- Attention机制：保持token表示稳定
+
+### Group Normalization
+
+把一组通道内的所有feature放一起计算统计量 (结合了BN和LN的思想)
+
+- 不依赖batch size：小batch或batch=1时仍然稳定
+  - 因为多个channel放在一起
+  - Group Norm主要用于batch_size=1-8的场景
+- 比Layer Norm更符合CNN语义：不是跨所有通道，而是跨相关通道组
+- 计算成本适中：比BN稳定，比LN更符合视觉任务直觉
+
+#### Group Norm: Batch Norm在小batch时的替代品
+
+### Instance Norm
+
+对每个样本的每个通道独立归一化
+
+- 每个归一化单元的数据点相对较少
+
+图像的空间相关性提供了足够的统计信息
+风格迁移的目标是"去统计化"而非"精确统计"
+在典型的应用场景下尺寸足够大
+实际效果证明这种"粗糙"的统计量已经足够
+
+这也解释了为什么Instance Norm主要用于特定任务(风格迁移)
+
+### Other notes
+
+使用频率排序
+
+Batch Norm - CNN的标配
+
+Layer Norm - Transformer的标配
+
+Group Norm - 小batch CV任务的救星
+
+Instance Norm - 风格迁移的专用工具
+
+Q1: BatchNorm和LayerNorm的最大区别？
+
+- BatchNorm归一化的是batch内的每个feature，依赖batch
+- LayerNorm归一化的是每个样本的全部feature，独立于batch
+
+Q: 为什么Transformer用LayerNorm？
+
+- 因为序列任务/变长输入/小batch/推理时，LayerNorm更稳定且易于并行
+
+Q: 如果batch size=1怎么办？
+- 用GroupNorm或LayerNorm。
+
+Q: BatchNorm在推理阶段用什么？
+- 用moving average的均值和方差，不用当前batch的统计量。
 
 ## Activation Function
 
@@ -605,30 +710,189 @@ Cons
 - 仍无momentum：没有利用梯度方向信息
 - 可能不稳定：在某些情况下仍有震荡
 
+Optimizor | Best for | Convergence Speed | Memory | Hyperparameter sensitivity
+--| -- | -- | -- | -- 
+SGD + momemtum | Simple model, best generalization | medium | Lowest | High (lr, momemtum)
+Adam | Complex Models, fast prototyping | Fast | 2 * SGD | Low (default works)
+AdamW | Transformers, large models | Fast | 2 * SGD | Medium (weight decay)
+RMSprop | RNN, non-stationary objectives | Medium fast | 1.5 * SGD | Medium
 
+## Other topics in Optimizers
 
+### Learning Rate Scheduling (学习率调度策略)
 
+直观理解 - 开车比喻, 想象你在开车找停车位：
 
+- 刚开始: 可以开快点探索 (高学习率)
+- 接近目标: 要慢下来精确停车 (降低学习率)
+- 如果开过头: 需要倒车调整 (learning rate decay)
 
+常用的scheduling策略
 
+- Step Decay (阶梯衰减)
+- Exponential Decay
+- Cosine Annealing (余弦退火)
+  - 先慢再快最后平滑 比较适合LLM
 
+### Convergence Guarantees
 
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
-#
+绝大部分DNN都是non-convex 问题
+
+现实中的深度学习 (Non-convex):
+
+- SGD: "我只能保证爬到某个山峰，不一定是最高的"
+- Adam: "我也只能爬到某个山峰，但我爬得快！"
+- 关键: 在深度学习中，找到"足够好的山峰"比找到"理论最高峰"更重要
+
+### Gradient Clipping (梯度裁剪)
+
+Gradient Norm Clipping (范数裁剪)
+- Like a 智能限速系统
+```
+if ||gradient|| > threshold:
+    gradient = gradient * (threshold / ||gradient||)
+```
+
+## Parameter Initialization
+
+### 不能做
+
+- 全零初始化 (最糟糕)
+  - 所有神经元完全相同，梯度也相同 → 对称性破缺失败
+- 太大的初始化
+  - Activation value explosion → 激活函数饱和 → 梯度消失
+- 太小的初始化
+  - 激活值接近0 → |z|过小 → 信息传递微弱 → 深层累积后梯度消失。
+
+理想初始化的目标 
+
+- 对称性破缺: 不同神经元有不同的初始化
+- 激活方差稳定: 前向传播时激活值不会过大/过小
+- 梯度方差稳定: 反向传播时梯度不会消失/爆炸
+- 适应网络架构: 针对不同激活函数和网络深度
+
+### Xavier/Glorot Initialization 经典初始化
+
+保持前向和反向传播的方差稳定
+
+- 假设：
+  - 输入x的方差为Var(x)
+  - 权重W独立同分布
+  - 激活函数线性（或接近线性）
+
+```
+y = Wx + b
+Var(y) = Var(W) × Var(x) × fan_in
+```
+希望: Var(y) = Var(x) (方差保持不变)
+结论: **Var(W) = 1/fan_in**
+
+对于权重矩阵 $\mathbf{W} \in \mathbb{R}^{m \times n}$：
+
+$$\text{fan\_in} = n \quad \text{(输入连接数)}$$
+$$\text{fan\_out} = m \quad \text{(输出连接数)}$$
+
+Xavier Normal
+$$W \sim \mathcal{N}\left(0, \frac{2}{\text{fan\_in} + \text{fan\_out}}\right)$$
+Xavier Uniform
+$$W \sim \mathcal{U}\left(-\sqrt{\frac{6}{\text{fan\_in} + \text{fan\_out}}}, \sqrt{\frac{6}{\text{fan\_in} + \text{fan\_out}}}\right)$$
+
+fan_in + fan_out 是前向和反向传播方差稳定需求的折中：
+- 太关注fan_in：反向传播可能不稳定
+- 太关注fan_out：前向传播可能不稳定
+- 加起来平均：两边都照顾到
+
+#### Use Case
+
+- 激活函数: tanh, sigmoid, linear
+- 网络: 传统全连接、早期CNN
+
+### He Kaiming Initialization (现代标配)
+
+专门为ReLU激活函数设计, 由于ReLU杀死一半神经元：
+
+- 1. 前向传播：需要补偿信息丢失 → 关注fan_in
+- 2. 反向传播：梯度自然稀疏 → fan_out影响减小
+- 3. 结论：主要考虑fan_in即可
+
+```
+Var(ReLU(Wx)) = 0.5 × Var(Wx)  # ReLU杀死一半
+要保持方差稳定: Var(Wx) = 2 × Var(x)
+因此: Var(W) = 2 / fan_in
+```
+
+He Normal
+$$W \sim \mathcal{N}\left(0, \frac{2}{\text{fan\_in}}\right)$$
+He Uniform
+$$W \sim \mathcal{U}\left(-\sqrt{\frac{6}{\text{fan\_in}}}, \sqrt{\frac{6}{\text{fan\_in}}}\right)$$
+
+### Small variance Normal - 大模型标准
+
+为什么大模型用小方差初始化？
+
+- 大模型的特殊问题: 参数规模巨大:
+  - GPT-4: 估计1.7T parameters
+  - 小误差 × 巨大参数量 = 大问题
+- 现代大模型标配LayerNorm
+  - 无论输入方差多大，输出都被"重置
+- LayerNorm is not that perfect
+  - The very first layer is not protected by LayerNorm.
+- 小方差(0.02)的经验来源
+  - BERT论文的经验值
+
+### Variance and propagation
+
+We want to keep the variance between layers similar
+
+方差 = 信号强度 因为：
+
+- 方差衡量数值的"离散程度"
+- 在神经网络中，离散程度 = 信息的丰富程度
+- 信息丰富 = 表达能力强 = "信号强"
+
+**保持方差稳定 = 保持每层的"信息处理能力"稳定！**
+
+对称性破缺：
+- 不是指数值关于0对称
+- 而是指神经元之间的功能对称性
+- 目标：让每个神经元有独特的"个性"
+- 方法：给每个权重不同的随机初始值
+
+## QA
+
+Q1. 为什么不能全零初始化?
+
+- Symmetry breaking failure
+  - The weight, activation and gradient is all the same
+- 网络无法学到不同的特征
+
+Q2: "Xavier和He初始化的区别
+
+- Xavier适合tanh/sigmoid等饱和激活函数
+- He专门为ReLU设计
+  - ReLu will kill half of the neurons, so needs bigger initial variance to compensate
+Q3. 现代大模型用什么初始化？
+- Transformer通常用较小的normal初始化（std=0.02）加上layer normalization
+- 这比传统的Xavier/He更保守，因为layer norm已经在稳定激活分布，不需要初始化承担太多责任
+Q4: 如何选择初始化方法
+- 主要看激活函数：
+  - ReLU系列用He，
+  - tanh/sigmoid用Xavier，
+  - GELU用小方差normal。
+- 但现代深度网络通常有batch norm或layer norm，初始化的重要性相对降低了。
+
+Q5. 为什么Adam在理论上不如SGD，但实践中大家都用Adam？
+
+- Majority of deep learning is non-convext optimization
+- Theoretically optimal does not mean much
+- Adam虽然没有convex收敛保证，但它在non-convex landscape上的经验表现更好 - 收敛更快，对超参数不敏感，特别适合复杂模型like Transformers。
+- 在实践中，我们更关心能否找到好的局部最优，而不是理论上的全局最优
+
+Q6. Saddle point (鞍点)
+
+- 在高维空间中，随机点是鞍点的概率 >> 是极值点的概率
+- 鞍点处梯度为零但不是最优解，会导致训练停滞。现代优化器如Adam和momentum通过惯性和自适应学习率来帮助逃脱鞍点
+
 ## Other notes
 
 ### 为什么均值为0（zero-mean）有助于加快收敛？
@@ -643,6 +907,23 @@ Cons
 
 - 中心化的激活（比如tanh输出在-1到1，均值0）能让梯度分布更均匀，有利于更快、更稳定地收敛。
 
+### Why most Deep Learning is Non-convex optimization problem.
+
+只要有一个隐藏层 + 非线性激活函数，损失函数就变成non-convex了
+English: Even one hidden layer + nonlinear activation → non-convex loss landscape
+
+```
+# Forward pass
+h = σ(W1 @ x + b1)      # 隐藏层
+y = W2 @ h + b2         # 输出层
+Loss = (y - target)²    # MSE loss
+
+Loss = (W2 @ σ(W1 @ x + b1) + b2 - target)²
+我们假设最简单的情况x=1,W1=w,ReLU激活, W2=1, b1=b2=0
+Loss(w) = (ReLU(w × 1) - target)²
+       = (max(0, w) - target)²
+```
+非线性激活函数让参数"纠缠"在一起，破坏了损失函数的凸性
 
 
 
